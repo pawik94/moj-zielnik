@@ -1,0 +1,33 @@
+{
+  "expo": {
+    "name": "Mój Zielnik",
+    "slug": "moj-zielnik",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#244208"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#244208"
+      },
+      "package": "com.pawik94.mojzielnik",
+      "permissions": []
+    },
+    "plugins": [
+      [
+        "expo-sqlite",
+        {
+          "enableFTS": true,
+          "useSQLCipher": false
+        }
+      ]
+    ],
+    "newArchEnabled": true
+  }
+}
