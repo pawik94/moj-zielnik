@@ -30,7 +30,7 @@
       "expo-updates"
     ],
     "updates": {
-      "url": "https://u.expo.dev/WSTAW-TU-PROJECT-ID",
+      "url": "https://u.expo.dev/860ddc37-b825-497d-82db-5ef1c0a35190",
       "enabled": true,
       "checkAutomatically": "ON_LOAD",
       "fallbackToCacheTimeout": 0
