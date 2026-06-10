@@ -26,8 +26,18 @@
           "enableFTS": true,
           "useSQLCipher": false
         }
-      ]
+      ],
+      "expo-updates"
     ],
+    "updates": {
+      "url": "https://u.expo.dev/WSTAW-TU-PROJECT-ID",
+      "enabled": true,
+      "checkAutomatically": "ON_LOAD",
+      "fallbackToCacheTimeout": 0
+    },
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
     "newArchEnabled": true
   }
 }
