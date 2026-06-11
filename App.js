@@ -73,11 +73,11 @@ export default function App() {
     // Step 6: load real app
     try {
       await new Promise(r => setTimeout(r, 500));
-      const { default: RealApp } = await import('./AppReal');
+      const { default: RealApp } = await import('./App');
       // If we get here everything works
       setStatus('GOTOWE');
     } catch (e) {
-      setError('AppReal FAIL: ' + e.message);
+      setError('App FAIL: ' + e.message);
     }
   };
 
