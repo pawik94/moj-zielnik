@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, ActivityIndicator } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { registerRootComponent } from 'expo';
 import { initDatabase } from './database';
 import HomeScreen from './screens/HomeScreen';
 import PlantDetailScreen from './screens/PlantDetailScreen';
@@ -11,7 +12,7 @@ import { COLORS } from './theme';
 
 const Stack = createNativeStackNavigator();
 
-export default function App() {
+function App() {
   const [ready, setReady] = useState(false);
   const [error, setError] = useState(null);
 
@@ -78,3 +79,5 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.bg,
   },
 });
+
+registerRootComponent(App);
