@@ -69,6 +69,16 @@ export default function App() {
     }
 
     setStatus('WSZYSTKO OK - laduje aplikacje...');
+
+    // Step 6: load real app
+    try {
+      await new Promise(r => setTimeout(r, 500));
+      const { default: RealApp } = await import('./AppReal');
+      // If we get here everything works
+      setStatus('GOTOWE');
+    } catch (e) {
+      setError('AppReal FAIL: ' + e.message);
+    }
   };
 
   return (
