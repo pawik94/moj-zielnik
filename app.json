@@ -27,9 +27,7 @@
           "useSQLCipher": false
         }
       ],
-      "expo-updates",
-      "expo-asset",
-      "expo-font"
+      "expo-updates"
     ],
     "updates": {
       "url": "https://u.expo.dev/860ddc37-b825-497d-82db-5ef1c0a35190",
@@ -40,11 +38,6 @@
     "runtimeVersion": {
       "policy": "appVersion"
     },
-    "newArchEnabled": false,
-    "extra": {
-      "eas": {
-        "projectId": "860ddc37-b825-497d-82db-5ef1c0a35190"
-      }
-    }
+    "newArchEnabled": false
   }
 }
