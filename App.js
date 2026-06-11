@@ -69,16 +69,6 @@ export default function App() {
     }
 
     setStatus('WSZYSTKO OK - laduje aplikacje...');
-
-    // Step 6: load  app
-    try {
-      await new Promise(r => setTimeout(r, 500));
-      const { default: RealApp } = await import('./App');
-      // If we get here everything works
-      setStatus('GOTOWE');
-    } catch (e) {
-      setError('App FAIL: ' + e.message);
-    }
   };
 
   return (
