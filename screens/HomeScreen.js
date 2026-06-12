@@ -7,9 +7,13 @@ import {
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import {
-  getTiers, getAllPlants, waterPlant, deletePlant, movePlant,
+  getTiers, getAllPlants, waterPlant, deletePlant,
+  movePlant, reorderPlantsInTier,
 } from '../database';
-import { COLORS, TIER_COLORS, SHADOWS, getWaterUrgency, getWaterLabel, getWaterColor } from '../theme';
+import {
+  COLORS, TIER_COLORS, SHADOWS,
+  getWaterUrgency, getWaterDaysLeft, getWaterColor,
+} from '../theme';
 
 const SCREEN_W = Dimensions.get('window').width;
 const TIER_MARGIN = 10;
@@ -19,10 +23,18 @@ export default function HomeScreen({ navigation }) {
   const [tiers, setTiers] = useState([]);
   const [plantsByTier, setPlantsByTier] = useState({});
   const [refreshing, setRefreshing] = useState(false);
-  const [draggingPlant, setDraggingPlant] = useState(null);
-  const [dragOverTier, setDragOverTier] = useState(null);
   const tierLayouts = useRef({});
   const scrollOffset = useRef(0);
+
+  // Shared drag state – single source of truth
+  const dragState = useRef({
+    active: false,
+    plant: null,
+    fromTierId: null,
+    fromIndex: null,
+  });
+  const [dragOverTierId, setDragOverTierId] = useState(null);
+  const [dragOverIndex, setDragOverIndex] = useState(null);
 
   const loadData = useCallback(async () => {
     const t = await getTiers();
@@ -35,69 +47,78 @@ export default function HomeScreen({ navigation }) {
 
   useFocusEffect(useCallback(() => { loadData(); }, [loadData]));
 
-  const handleWater = async (plantId) => {
-    await waterPlant(plantId);
+  // Resolve tier + approximate index from absolute pageY + pageX
+  const resolveTarget = (pageY, pageX) => {
+    let tierId = null;
+    let index = null;
+    for (const [id, layout] of Object.entries(tierLayouts.current)) {
+      if (pageY >= layout.pageY && pageY <= layout.pageY + layout.height) {
+        tierId = parseInt(id);
+        // estimate column index from pageX
+        const plants = plantsByTier[tierId] || [];
+        const count = plants.length || 1;
+        const availW = SCREEN_W - TIER_MARGIN * 2 - 16;
+        const boxW = (availW - BOX_GAP * (count - 1)) / count;
+        const relX = pageX - TIER_MARGIN - 8;
+        index = Math.min(count - 1, Math.max(0, Math.floor(relX / (boxW + BOX_GAP))));
+        break;
+      }
+    }
+    return { tierId, index };
+  };
+
+  const onDragMove = useCallback((pageY, pageX) => {
+    const { tierId, index } = resolveTarget(pageY, pageX);
+    setDragOverTierId(tierId);
+    setDragOverIndex(index);
+  }, [plantsByTier]);
+
+  const onDragEnd = useCallback(async (pageY, pageX) => {
+    const ds = dragState.current;
+    if (!ds.active || !ds.plant) return;
+    const { tierId: toTierId, index: toIndex } = resolveTarget(pageY, pageX);
+
+    ds.active = false;
+    setDragOverTierId(null);
+    setDragOverIndex(null);
+
+    if (!toTierId) return;
+
+    if (toTierId === ds.fromTierId) {
+      // Reorder within same tier
+      const plants = [...(plantsByTier[toTierId] || [])];
+      const fromIdx = plants.findIndex(p => p.id === ds.plant.id);
+      if (fromIdx === -1 || toIndex === null || fromIdx === toIndex) return;
+      const reordered = [...plants];
+      reordered.splice(fromIdx, 1);
+      reordered.splice(toIndex, 0, ds.plant);
+      await reorderPlantsInTier(toTierId, reordered.map(p => p.id));
+    } else {
+      // Move to different tier
+      const toPlants = plantsByTier[toTierId] || [];
+      await movePlant(ds.plant.id, toTierId, toPlants.length);
+    }
     await loadData();
-  };
-
-  const handleDelete = (plant) => {
-    Alert.alert('Usuń', `Usunąć "${plant.name}"?`, [
-      { text: 'Anuluj', style: 'cancel' },
-      { text: 'Usuń', style: 'destructive', onPress: async () => {
-        await deletePlant(plant.id); await loadData();
-      }},
-    ]);
-  };
-
-  // Called continuously during drag with pageY (absolute screen Y)
-  const onDragMove = useCallback((pageY) => {
-    let found = null;
-    for (const [id, layout] of Object.entries(tierLayouts.current)) {
-      // layout.pageY is absolute Y of tier top on screen
-      if (pageY >= layout.pageY && pageY <= layout.pageY + layout.height) {
-        found = parseInt(id);
-        break;
-      }
-    }
-    setDragOverTier(found);
-  }, []);
-
-  const onDragEnd = useCallback(async (plant, pageY) => {
-    let targetTier = null;
-    for (const [id, layout] of Object.entries(tierLayouts.current)) {
-      if (pageY >= layout.pageY && pageY <= layout.pageY + layout.height) {
-        targetTier = parseInt(id);
-        break;
-      }
-    }
-    setDraggingPlant(null);
-    setDragOverTier(null);
-    if (targetTier && targetTier !== plant.tier_id) {
-      const toPlants = plantsByTier[targetTier] || [];
-      await movePlant(plant.id, targetTier, toPlants.length);
-      await loadData();
-    }
   }, [plantsByTier, loadData]);
 
   const needsWater = Object.values(plantsByTier).flat()
-    .filter(p => !p.last_watered || (new Date() - new Date(p.last_watered)) / 86400000 >= p.water_days).length;
+    .filter(p => !p.last_watered ||
+      (new Date() - new Date(p.last_watered)) / 86400000 >= p.water_days).length;
 
   return (
     <View style={s.root}>
       <StatusBar barStyle="light-content" backgroundColor={COLORS.primaryDark} />
       <View style={s.header}>
-        <View>
-          <Text style={s.headerTitle}>Mój Zielnik 🌿</Text>
-          <Text style={s.headerSub}>
-            {Object.values(plantsByTier).flat().length} roślin
-            {needsWater > 0 ? ` · ${needsWater} do podlania` : ' · wszystkie OK'}
-          </Text>
-        </View>
+        <Text style={s.headerTitle}>Mój Zielnik 🌿</Text>
+        <Text style={s.headerSub}>
+          {Object.values(plantsByTier).flat().length} roślin
+          {needsWater > 0 ? ` · ${needsWater} do podlania` : ' · wszystkie OK'}
+        </Text>
       </View>
 
       {needsWater > 0 && (
         <View style={s.alertStrip}>
-          <Ionicons name="water" size={14} color={COLORS.waterNow} />
+          <Ionicons name="water" size={13} color={COLORS.waterNow} />
           <Text style={s.alertText}>{needsWater} roślin wymaga podlania!</Text>
         </View>
       )}
@@ -119,16 +140,25 @@ export default function HomeScreen({ navigation }) {
             tier={tier}
             tierIndex={idx}
             plants={plantsByTier[tier.id] || []}
-            isDragOver={dragOverTier === tier.id && draggingPlant?.tier_id !== tier.id}
+            dragOverTierId={dragOverTierId}
+            dragOverIndex={dragOverIndex}
+            dragActivePlantId={dragState.current.plant?.id}
             onLayout={(pageY, height) => {
               tierLayouts.current[tier.id] = { pageY, height };
             }}
             onPlantPress={(p) => navigation.navigate('PlantDetail', { plantId: p.id })}
             onPlantEdit={(p) => navigation.navigate('EditPlant', { plantId: p.id })}
-            onPlantWater={handleWater}
-            onPlantDelete={handleDelete}
+            onPlantWater={async (id) => { await waterPlant(id); await loadData(); }}
+            onPlantDelete={(plant) => Alert.alert('Usuń', `Usunąć "${plant.name}"?`, [
+              { text: 'Anuluj', style: 'cancel' },
+              { text: 'Usuń', style: 'destructive', onPress: async () => {
+                await deletePlant(plant.id); await loadData();
+              }},
+            ])}
             onAddPlant={() => navigation.navigate('EditPlant', { tierId: tier.id })}
-            onDragStart={(p) => setDraggingPlant(p)}
+            onDragStart={(plant, idx) => {
+              dragState.current = { active: true, plant, fromTierId: tier.id, fromIndex: idx };
+            }}
             onDragMove={onDragMove}
             onDragEnd={onDragEnd}
           />
@@ -139,49 +169,55 @@ export default function HomeScreen({ navigation }) {
 }
 
 function TierBlock({
-  tier, tierIndex, plants, isDragOver,
+  tier, tierIndex, plants,
+  dragOverTierId, dragOverIndex, dragActivePlantId,
   onLayout, onPlantPress, onPlantEdit, onPlantWater, onPlantDelete,
   onAddPlant, onDragStart, onDragMove, onDragEnd,
 }) {
   const tc = TIER_COLORS[tierIndex] || TIER_COLORS[0];
   const tierRef = useRef(null);
+  const isDragOver = dragOverTierId === tier.id;
 
-  const measureAndStore = () => {
+  const measureSelf = () => {
     if (tierRef.current) {
-      tierRef.current.measure((x, y, width, height, pageX, pageY) => {
-        onLayout(pageY, height);
+      tierRef.current.measure((x, y, w, h, px, pageY) => {
+        onLayout(pageY, h);
       });
     }
   };
 
-  // For tier 3 (index 2), split plants into two groups of max 3
   const isBottomTier = tierIndex === 2;
-  const topPlants = isBottomTier ? plants.slice(0, Math.ceil(plants.length / 2)) : plants;
-  const bottomPlants = isBottomTier ? plants.slice(Math.ceil(plants.length / 2)) : [];
+  const half = isBottomTier ? Math.ceil(plants.length / 2) : plants.length;
+  const topPlants = plants.slice(0, half);
+  const botPlants = isBottomTier ? plants.slice(half) : [];
 
-  const renderRow = (rowPlants) => {
-    if (rowPlants.length === 0) return null;
+  const renderRow = (rowPlants, startIdx) => {
+    if (!rowPlants.length) return null;
     const count = rowPlants.length;
     const availW = SCREEN_W - TIER_MARGIN * 2 - 16 - BOX_GAP * (count - 1);
     const boxW = availW / count;
-
     return (
       <View style={s.boxRow}>
-        {rowPlants.map(plant => (
-          <PlantBox
-            key={plant.id}
-            plant={plant}
-            tierIndex={tierIndex}
-            width={boxW}
-            onPress={() => onPlantPress(plant)}
-            onEdit={() => onPlantEdit(plant)}
-            onWater={() => onPlantWater(plant.id)}
-            onDelete={() => onPlantDelete(plant)}
-            onDragStart={() => onDragStart(plant)}
-            onDragMove={onDragMove}
-            onDragEnd={(pageY) => onDragEnd(plant, pageY)}
-          />
-        ))}
+        {rowPlants.map((plant, i) => {
+          const absIdx = startIdx + i;
+          const isDropTarget = isDragOver && dragOverIndex === absIdx && plant.id !== dragActivePlantId;
+          return (
+            <PlantBox
+              key={plant.id}
+              plant={plant}
+              tierIndex={tierIndex}
+              width={boxW}
+              isDropTarget={isDropTarget}
+              onPress={() => onPlantPress(plant)}
+              onEdit={() => onPlantEdit(plant)}
+              onWater={() => onPlantWater(plant.id)}
+              onDelete={() => onPlantDelete(plant)}
+              onDragStart={() => onDragStart(plant, absIdx)}
+              onDragMove={onDragMove}
+              onDragEnd={onDragEnd}
+            />
+          );
+        })}
       </View>
     );
   };
@@ -191,16 +227,15 @@ function TierBlock({
       ref={tierRef}
       style={[s.tier, { borderColor: tc.border, backgroundColor: tc.bg },
         isDragOver && s.tierDragOver]}
-      onLayout={measureAndStore}
+      onLayout={measureSelf}
     >
-      {/* Header */}
       <View style={[s.tierHeader, { borderBottomColor: tc.border + '50' }]}>
         <View style={[s.tierAccent, { backgroundColor: tc.border }]} />
         <View style={s.tierHeaderText}>
           <Text style={[s.tierName, { color: tc.text }]} numberOfLines={1}>{tier.name}</Text>
-          {tier.subtitle ? (
-            <Text style={[s.tierSub, { color: tc.text + 'AA' }]} numberOfLines={1}>{tier.subtitle}</Text>
-          ) : null}
+          {tier.subtitle
+            ? <Text style={[s.tierSub, { color: tc.text + 'AA' }]} numberOfLines={1}>{tier.subtitle}</Text>
+            : null}
         </View>
         <View style={[s.tierCount, { backgroundColor: tc.border }]}>
           <Text style={s.tierCountTxt}>{plants.length}</Text>
@@ -210,79 +245,69 @@ function TierBlock({
         </TouchableOpacity>
       </View>
 
-      {/* Plants */}
       <View style={s.boxesWrap}>
-        {plants.length === 0 ? (
-          <Text style={[s.emptyTxt, { color: tc.text + '70' }]}>Brak roślin – naciśnij + aby dodać</Text>
-        ) : (
-          <>
-            {renderRow(topPlants)}
-            {isBottomTier && bottomPlants.length > 0 && (
-              <>
-                <View style={[s.divider, { backgroundColor: tc.border + '40' }]} />
-                {renderRow(bottomPlants)}
-              </>
-            )}
-          </>
-        )}
+        {plants.length === 0
+          ? <Text style={[s.emptyTxt, { color: tc.text + '70' }]}>Brak roślin – naciśnij + aby dodać</Text>
+          : <>
+              {renderRow(topPlants, 0)}
+              {isBottomTier && botPlants.length > 0 && (
+                <>
+                  <View style={[s.divider, { backgroundColor: tc.border + '40' }]} />
+                  {renderRow(botPlants, half)}
+                </>
+              )}
+            </>
+        }
       </View>
-
-      {isDragOver && (
-        <View style={[s.dropOverlay, { borderColor: tc.border }]}>
-          <Text style={[s.dropTxt, { color: tc.text }]}>↓ Upuść tutaj</Text>
-        </View>
-      )}
     </View>
   );
 }
 
 function PlantBox({
-  plant, tierIndex, width,
+  plant, tierIndex, width, isDropTarget,
   onPress, onEdit, onWater, onDelete,
   onDragStart, onDragMove, onDragEnd,
 }) {
   const tc = TIER_COLORS[tierIndex] || TIER_COLORS[0];
   const pan = useRef(new Animated.ValueXY()).current;
   const scale = useRef(new Animated.Value(1)).current;
-  const isDragging = useRef(false);
-  const zIndex = useRef(new Animated.Value(1)).current;
+  const dragging = useRef(false);
 
   const urgency = getWaterUrgency(plant.last_watered, plant.water_days);
-  const waterLabel = getWaterLabel(plant.last_watered, plant.water_days);
+  const daysLeft = getWaterDaysLeft(plant.last_watered, plant.water_days);
   const waterColor = getWaterColor(urgency);
+  // Label: "0d" when needs water (red), "Xd" otherwise
+  const waterLabel = urgency === 'now' ? '0d' : `${daysLeft}d`;
 
-  const panResponder = useRef(PanResponder.create({
+  const pr = useRef(PanResponder.create({
     onStartShouldSetPanResponder: () => false,
-    onMoveShouldSetPanResponder: () => isDragging.current,
+    onMoveShouldSetPanResponder: () => dragging.current,
     onPanResponderMove: (evt, gs) => {
-      if (!isDragging.current) return;
+      if (!dragging.current) return;
       pan.setValue({ x: gs.dx, y: gs.dy });
-      onDragMove(evt.nativeEvent.pageY);
+      onDragMove(evt.nativeEvent.pageY, evt.nativeEvent.pageX);
     },
-    onPanResponderRelease: (evt, gs) => {
-      if (!isDragging.current) return;
-      isDragging.current = false;
-      const dropY = evt.nativeEvent.pageY;
+    onPanResponderRelease: (evt) => {
+      if (!dragging.current) return;
+      dragging.current = false;
+      const { pageY, pageX } = evt.nativeEvent;
       Animated.parallel([
-        Animated.spring(pan, { toValue: { x: 0, y: 0 }, useNativeDriver: true, tension: 100 }),
+        Animated.spring(pan, { toValue: { x: 0, y: 0 }, useNativeDriver: true, tension: 120 }),
         Animated.spring(scale, { toValue: 1, useNativeDriver: true }),
       ]).start();
-      zIndex.setValue(1);
-      onDragEnd(dropY);
+      onDragEnd(pageY, pageX);
     },
     onPanResponderTerminate: () => {
-      isDragging.current = false;
+      dragging.current = false;
       pan.setValue({ x: 0, y: 0 });
       scale.setValue(1);
-      zIndex.setValue(1);
     },
   })).current;
 
   const startDrag = () => {
-    isDragging.current = true;
-    zIndex.setValue(999);
-    Animated.spring(scale, { toValue: 1.07, useNativeDriver: true }).start();
+    dragging.current = true;
     onDragStart();
+    Animated.spring(scale, { toValue: 1.07, useNativeDriver: true }).start();
   };
 
   return (
@@ -291,17 +316,15 @@ function PlantBox({
         s.box,
         {
           width,
-          borderColor: tc.border,
-          backgroundColor: COLORS.card,
+          borderColor: isDropTarget ? COLORS.primary : tc.border,
           transform: [{ translateX: pan.x }, { translateY: pan.y }, { scale }],
-          zIndex,
-          elevation: isDragging.current ? 10 : 2,
         },
       ]}
-      {...panResponder.panHandlers}
+      {...pr.panHandlers}
     >
       <View style={[s.boxAccent, { backgroundColor: tc.border }]} />
 
+      {/* Name + type – tappable */}
       <TouchableOpacity
         style={s.boxMain}
         onPress={onPress}
@@ -309,32 +332,26 @@ function PlantBox({
         delayLongPress={350}
         activeOpacity={0.75}
       >
-        <Text style={[s.boxName, { color: COLORS.textPrimary }]} numberOfLines={2}>
-          {plant.name}
-        </Text>
-        <Text style={[s.boxType, { color: COLORS.textMuted }]} numberOfLines={1}>
-          {plant.type}
-        </Text>
+        <Text style={s.boxName} numberOfLines={2}>{plant.name}</Text>
+        <Text style={s.boxType} numberOfLines={1}>{plant.type}</Text>
       </TouchableOpacity>
 
-      <View style={s.boxBottom}>
-        <TouchableOpacity
-          style={[s.waterBtn, {
-            borderColor: waterColor,
-            backgroundColor: waterColor + '15',
-          }]}
-          onPress={onWater}
-        >
-          <Ionicons name="water" size={12} color={waterColor} />
-          <Text style={[s.waterTxt, { color: waterColor }]}>{waterLabel}</Text>
-        </TouchableOpacity>
+      {/* Water indicator – compact, always tappable */}
+      <TouchableOpacity
+        style={[s.waterChip, { borderColor: waterColor, backgroundColor: waterColor + '18' }]}
+        onPress={onWater}
+      >
+        <Ionicons name="water" size={11} color={waterColor} />
+        <Text style={[s.waterChipTxt, { color: waterColor }]}>{waterLabel}</Text>
+      </TouchableOpacity>
 
+      {/* Edit + delete below water chip */}
+      <View style={s.boxIcons}>
         <TouchableOpacity style={s.iconBtn} onPress={onEdit}>
-          <Ionicons name="pencil" size={13} color={COLORS.textMuted} />
+          <Ionicons name="pencil" size={12} color={COLORS.textMuted} />
         </TouchableOpacity>
-
         <TouchableOpacity style={s.iconBtn} onPress={onDelete}>
-          <Ionicons name="trash-outline" size={13} color={COLORS.red} />
+          <Ionicons name="trash-outline" size={12} color={COLORS.red} />
         </TouchableOpacity>
       </View>
     </Animated.View>
@@ -346,8 +363,7 @@ const s = StyleSheet.create({
 
   header: {
     backgroundColor: COLORS.primaryDark,
-    paddingTop: 50, paddingBottom: 13,
-    paddingHorizontal: 16,
+    paddingTop: 50, paddingBottom: 13, paddingHorizontal: 16,
   },
   headerTitle: { color: '#fff', fontSize: 22, fontWeight: '800' },
   headerSub: { color: 'rgba(255,255,255,0.7)', fontSize: 12, marginTop: 2 },
@@ -363,7 +379,6 @@ const s = StyleSheet.create({
 
   tier: {
     borderRadius: 14, borderWidth: 1.5,
-    overflow: 'visible',
     ...SHADOWS.small,
   },
   tierDragOver: { borderWidth: 2.5, borderStyle: 'dashed' },
@@ -388,49 +403,44 @@ const s = StyleSheet.create({
   },
 
   boxesWrap: { padding: 8 },
-  boxRow: { flexDirection: 'row', gap: BOX_GAP },
-
+  boxRow: { flexDirection: 'row', gap: BOX_GAP, marginBottom: 0 },
   divider: { height: 1, marginVertical: 8, borderRadius: 1 },
-
   emptyTxt: {
     textAlign: 'center', fontSize: 12,
     fontStyle: 'italic', paddingVertical: 14,
   },
-
-  dropOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    borderWidth: 2.5, borderStyle: 'dashed', borderRadius: 14,
-    alignItems: 'center', justifyContent: 'center',
-    backgroundColor: 'rgba(255,255,255,0.75)',
-  },
-  dropTxt: { fontSize: 15, fontWeight: '800' },
 
   // Box
   box: {
     borderRadius: 10, borderWidth: 1.5,
     backgroundColor: '#fff',
     overflow: 'hidden',
-    minHeight: 90,
+    minHeight: 95,
     ...SHADOWS.small,
   },
   boxAccent: { height: 3, width: '100%' },
-  boxMain: { padding: 9, flex: 1 },
-  boxName: { fontSize: 13, fontWeight: '700', lineHeight: 17 },
-  boxType: { fontSize: 10, marginTop: 3 },
+  boxMain: { paddingHorizontal: 8, paddingTop: 7, paddingBottom: 4, flex: 1 },
+  boxName: { fontSize: 12, fontWeight: '700', color: COLORS.textPrimary, lineHeight: 16 },
+  boxType: { fontSize: 10, color: COLORS.textMuted, marginTop: 2 },
 
-  boxBottom: {
-    flexDirection: 'row', alignItems: 'center',
-    paddingHorizontal: 8, paddingBottom: 8, gap: 5,
-  },
-  waterBtn: {
+  // Compact water chip
+  waterChip: {
     flexDirection: 'row', alignItems: 'center', gap: 3,
-    borderWidth: 1.5, borderRadius: 10,
+    alignSelf: 'flex-start',
+    marginHorizontal: 8,
+    borderWidth: 1.5, borderRadius: 8,
     paddingHorizontal: 6, paddingVertical: 3,
-    flex: 1,
+    minWidth: 36,
   },
-  waterTxt: { fontSize: 10, fontWeight: '700' },
+  waterChipTxt: { fontSize: 11, fontWeight: '700' },
+
+  // Edit + delete row
+  boxIcons: {
+    flexDirection: 'row', gap: 4,
+    paddingHorizontal: 8, paddingTop: 5, paddingBottom: 8,
+  },
   iconBtn: {
-    padding: 5, borderRadius: 7,
+    padding: 4, borderRadius: 6,
     backgroundColor: 'rgba(0,0,0,0.05)',
   },
 });
