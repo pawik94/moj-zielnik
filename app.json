@@ -27,7 +27,9 @@
           "useSQLCipher": false
         }
       ],
-      "expo-updates"
+      "expo-updates",
+      "expo-asset",
+      "expo-font"
     ],
     "updates": {
       "url": "https://u.expo.dev/860ddc37-b825-497d-82db-5ef1c0a35190",
